@@ -177,17 +177,6 @@ object Archive {
     extends IArchiveExtractCallback
        with CloseLater
   {
-//    override def getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream = {
-//      for {
-//        _ <- Some(())
-//        if extractAskMode == ExtractAskMode.EXTRACT
-//        path = Paths.get(entries(index).path)
-//        parent = path.getParent
-//        _ = Files.createDirectories(parent)
-//        _ = { if (!Files.exists(path)) Files.createFile(path) else () }
-//        channel = closeLater(Files.newByteChannel(path))
-//      } yield new ChannelOutput(channel)
-//    }.orNull
     override def getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream =
       if (extractAskMode != ExtractAskMode.EXTRACT || entries(index)._isDir) null
       else {
