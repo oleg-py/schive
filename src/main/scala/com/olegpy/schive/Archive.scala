@@ -56,13 +56,36 @@ class Archive private (path: Path) {
     }
 
   def extractSome(f: Entry => Option[Path]): Archive = {
+    val output = (path: Path, bytes: Array[Byte]) => {
+      if (!Files.exists(path.getParent)) {
+        Files.createDirectories(path.getParent)
+      }
+
+      Files.write(path, bytes, StandardOpenOption.CREATE)
+      ()
+    }
+
+    val curried = output.curried
+    val consumer = f andThen (_.map(curried))
+
+    processSome(consumer)
+  }
+
+  def mapSome[A](f: Entry => Option[Array[Byte] => A]): Vector[A] = {
+    val b = Vector.newBuilder[A]
+    val push = (a: A) => { b += a; () }
+    val consumer = f andThen (opt => opt map (_ andThen push))
+    processSome(consumer)
+    b.result()
+  }
+
+  def processSome(f: Entry => Option[Array[Byte] => Unit]) = {
     val backingArchive = inArchive
     val callback = new ExtractCallback(f, entries)
 
     throwIfFailed(
       Try { backingArchive.extract(null, false, callback) },
-      Try { backingArchive.close() },
-      Try { callback.close() }
+      Try { backingArchive.close() }
     )
 
     this
@@ -173,24 +196,32 @@ object Archive {
     override def close(): Unit = channel.close()
   }
 
-  private[schive] class ExtractCallback(f: Entry => Option[Path], entries: Vector[Entry])
+  private[schive] class ExtractCallback(f: Entry => Option[Array[Byte] => Unit], entries: Vector[Entry])
     extends IArchiveExtractCallback
-       with CloseLater
   {
-    override def getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream =
-      if (extractAskMode != ExtractAskMode.EXTRACT || entries(index)._isDir) null
-      else {
-        (for (path <- f(entries(index))) yield {
-          val parent = path.getParent
-          Option(parent).filterNot(Files.exists(_)).foreach(Files.createDirectories(_))
-          if (!Files.exists(path)) Files.createFile(path)
-          val channel = closeLater(Files.newByteChannel(path, StandardOpenOption.WRITE))
-          new ChannelOutput(channel)
-        }).orNull
+    private[this] var current: (ByteArrayStream, Array[Byte] => Unit) = _
+
+    override def getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream = {
+      for {
+        consumer <- f(entries(index))
+        if extractAskMode == ExtractAskMode.EXTRACT && !entries(index)._isDir
+        stream = new ByteArrayStream(Int.MaxValue)
+      } yield {
+        current = stream -> consumer
+        stream
       }
+    }.orNull
 
     override def prepareOperation(extractAskMode: ExtractAskMode): Unit = ()
-    override def setOperationResult(extractOperationResult: ExtractOperationResult): Unit = ()
+    override def setOperationResult(result: ExtractOperationResult): Unit =
+      if (result == ExtractOperationResult.OK) {
+        val (stream, consumer) = current
+        throwIfFailed(
+          Try(consumer(stream.getBytes)),
+          Try(stream.close())
+        )
+      }
+
     override def setCompleted(complete: Long): Unit = ()
     override def setTotal(total: Long): Unit = ()
   }
@@ -228,11 +259,11 @@ object Archive {
 
     override def getStream(index: Int): ISequentialInStream = {
       entries(index) match {
-        case RetainExisting(_) => null
-        case ReplaceExisting(_, buff) => closeLater(new ByteArrayStream(buff, false))
-        case AddNew(_, buff) => closeLater(new ByteArrayStream(buff, false))
+        case RetainExisting(_) => None
+        case ReplaceExisting(_, buff) => Some(closeLater(new ByteArrayStream(buff, false)))
+        case AddNew(_, buff) => Some(closeLater(new ByteArrayStream(buff, false)))
       }
-    }
+    }.orNull
 
     override def getItemInformation(index: Int, outItemFactory: OutItemFactory[IOutItemAllFormats]) : IOutItemAllFormats = {
       entries(index) match {
