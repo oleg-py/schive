@@ -133,6 +133,8 @@ class Archive private (path: Path) {
 }
 
 object Archive {
+  private[this] lazy val ensureLibInit: Unit = { SevenZip.initSevenZipFromPlatformJAR() }
+
   final val SingletonPath: String = "???"
 
   class Entry private[schive] (item: ISimpleInArchiveItem) {
@@ -146,7 +148,10 @@ object Archive {
   case class ReplaceExisting(i: Int, content: Array[Byte]) extends SpliceOp
   case class AddNew(path: String, content: Array[Byte]) extends SpliceOp
 
-  def apply(path: Path): Archive = new Archive(path)
+  def apply(path: Path): Archive = {
+    ensureLibInit
+    new Archive(path)
+  }
 
   private def normalized(path: String) = {
     val slashed = path.replace('\\', '/')
