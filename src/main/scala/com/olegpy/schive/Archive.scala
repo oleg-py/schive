@@ -199,28 +199,24 @@ object Archive {
   private[schive] class ExtractCallback(f: Entry => Option[Array[Byte] => Unit], entries: Vector[Entry])
     extends IArchiveExtractCallback
   {
-    private[this] var current: (ByteArrayStream, Array[Byte] => Unit) = _
+    private[this] var current: Option[(ByteArrayStream, (Array[Byte] => Unit))] = None
 
     override def getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream = {
-      for {
+      current = for {
         consumer <- f(entries(index))
         if extractAskMode == ExtractAskMode.EXTRACT && !entries(index)._isDir
         stream = new ByteArrayStream(Int.MaxValue)
       } yield {
-        current = stream -> consumer
-        stream
+        stream -> consumer
       }
-    }.orNull
+      current.map(_._1).orNull
+    }
 
     override def prepareOperation(extractAskMode: ExtractAskMode): Unit = ()
-    override def setOperationResult(result: ExtractOperationResult): Unit =
-      if (result == ExtractOperationResult.OK) {
-        val (stream, consumer) = current
-        throwIfFailed(
-          Try(consumer(stream.getBytes)),
-          Try(stream.close())
-        )
-      }
+    override def setOperationResult(result: ExtractOperationResult): Unit = for {
+      (stream, consumer) <- current
+      if result == ExtractOperationResult.OK
+    } throwIfFailed(Try(consumer(stream.getBytes)), Try(stream.close()))
 
     override def setCompleted(complete: Long): Unit = ()
     override def setTotal(total: Long): Unit = ()
